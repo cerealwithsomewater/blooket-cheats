@@ -615,39 +615,76 @@
         i.remove();
         
         function getStateNode() {
-            // More robust React component access with multiple fallbacks
-            function findReactComponent(element = document.querySelector("body>div")) {
-                // Try multiple React internal access patterns
-                const reactKeys = Object.keys(element).filter(key => key.startsWith('__reactInternalInstance') || key.startsWith('__reactFiber'));
-                
-                for (const key of reactKeys) {
-                    const fiber = element[key];
-                    if (fiber) {
-                        // Try to find stateNode in different ways
-                        let stateNode = fiber.stateNode || fiber.memoizedState?.stateNode;
-                        if (stateNode) return stateNode;
-                        
-                        // Try to find in children
-                        let child = fiber.child;
-                        while (child) {
-                            stateNode = child.stateNode || child.memoizedState?.stateNode;
-                            if (stateNode) return stateNode;
-                            child = child.child;
-                        }
-                    }
+            function findStateNodeFromFiber(fiber) {
+                const isUsable = (sn) => sn && typeof sn.setState === "function";
+                if (!fiber) return null;
+                if (isUsable(fiber.stateNode)) return fiber.stateNode;
+                // Traverse children and siblings breadth-first to avoid deep recursion
+                const queue = [];
+                if (fiber.child) queue.push(fiber.child);
+                if (fiber.sibling) queue.push(fiber.sibling);
+                while (queue.length) {
+                    const f = queue.shift();
+                    if (!f) continue;
+                    if (isUsable(f.stateNode)) return f.stateNode;
+                    if (f.child) queue.push(f.child);
+                    if (f.sibling) queue.push(f.sibling);
                 }
-                
-                // Fallback to old method if new methods fail
+                return null;
+            }
+
+            function getFiberFromElement(element) {
+                if (!element || typeof element !== "object") return null;
                 try {
-                    return Object.values(element)[1]?.children?.[0]?._owner?.stateNode;
-                } catch (e) {
-                    // Try next element
-                    const nextElement = element.querySelector(":scope>div");
-                    return nextElement ? findReactComponent(nextElement) : null;
+                    const keys = Object.keys(element);
+                    const fiberKey = keys.find(k => k.startsWith("__reactFiber$") || k === "__reactFiber" || k.startsWith("__reactInternalInstance$") || k === "__reactInternalInstance" || k.startsWith("__reactContainer$"));
+                    return fiberKey ? element[fiberKey] : null;
+                } catch {
+                    return null;
                 }
             }
-            
-            return findReactComponent();
+
+            function findReactComponent(start) {
+                const candidates = [
+                    start,
+                    document.querySelector("#__next"),
+                    document.querySelector("#root"),
+                    document.querySelector("#app"),
+                    document.body,
+                    document.querySelector("body > div")
+                ].filter(Boolean);
+
+                const visited = new Set();
+                const queue = [...candidates];
+
+                while (queue.length) {
+                    const el = queue.shift();
+                    if (!el || visited.has(el)) continue;
+                    visited.add(el);
+
+                    const fiber = getFiberFromElement(el);
+                    const stateNode = findStateNodeFromFiber(fiber);
+                    if (stateNode) return stateNode;
+
+                    // Explore child elements
+                    if (el.children && el.children.length) {
+                        for (const child of el.children) queue.push(child);
+                    }
+                }
+
+                // Final conservative fallback (guarded): try legacy owner path if structure exists
+                try {
+                    const root = document.querySelector("body > div");
+                    if (root && root.children && root.children[0]) {
+                        const maybe = Object.values(root)[1]?.children?.[0]?._owner?.stateNode;
+                        if (maybe) return maybe;
+                    }
+                } catch {}
+
+                return null;
+            }
+
+            return findReactComponent(document.querySelector("body > div"));
         }
         
         const Cheats = {
