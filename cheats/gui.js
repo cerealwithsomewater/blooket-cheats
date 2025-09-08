@@ -615,11 +615,39 @@
         i.remove();
         
         function getStateNode() {
-            return Object.values(
-                (function react(r = document.querySelector("body>div")) {
-                    return Object.values(r)[1]?.children?.[0]?._owner.stateNode ? r : react(r.querySelector(":scope>div"));
-                })()
-            )[1].children[0]._owner.stateNode;
+            // More robust React component access with multiple fallbacks
+            function findReactComponent(element = document.querySelector("body>div")) {
+                // Try multiple React internal access patterns
+                const reactKeys = Object.keys(element).filter(key => key.startsWith('__reactInternalInstance') || key.startsWith('__reactFiber'));
+                
+                for (const key of reactKeys) {
+                    const fiber = element[key];
+                    if (fiber) {
+                        // Try to find stateNode in different ways
+                        let stateNode = fiber.stateNode || fiber.memoizedState?.stateNode;
+                        if (stateNode) return stateNode;
+                        
+                        // Try to find in children
+                        let child = fiber.child;
+                        while (child) {
+                            stateNode = child.stateNode || child.memoizedState?.stateNode;
+                            if (stateNode) return stateNode;
+                            child = child.child;
+                        }
+                    }
+                }
+                
+                // Fallback to old method if new methods fail
+                try {
+                    return Object.values(element)[1]?.children?.[0]?._owner?.stateNode;
+                } catch (e) {
+                    // Try next element
+                    const nextElement = element.querySelector(":scope>div");
+                    return nextElement ? findReactComponent(nextElement) : null;
+                }
+            }
+            
+            return findReactComponent();
         }
         
         const Cheats = {
